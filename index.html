@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Votos por município — Deputado Estadual CE 2026</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--ink:#1b1f24;--mut:#5f6b7a;--line:#e1e5ea;--brand:#0b6e4f;--brand2:#095a41;--warn:#b45309;--err:#b42318}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:var(--brand);color:#fff;padding:18px 20px}
+  header h1{margin:0;font-size:20px}
+  header p{margin:4px 0 0;opacity:.9;font-size:13px}
+  main{max-width:1100px;margin:0 auto;padding:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+  label{display:block;font-weight:600;margin-bottom:6px}
+  input[type=search],select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
+  select{margin-top:8px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  button{border:0;border-radius:8px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer;background:var(--brand);color:#fff}
+  button:hover:not(:disabled){background:var(--brand2)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.sec{background:#fff;color:var(--brand);border:1px solid var(--brand)}
+  .bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:8px}
+  .bar>div{height:100%;width:0;background:var(--brand);transition:width .2s}
+  .msg{font-size:13px;color:var(--mut);margin-top:6px}
+  .warn{color:var(--warn)}.err{color:var(--err)}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+  .kpi{border:1px solid var(--line);border-radius:8px;padding:10px}
+  .kpi b{display:block;font-size:20px}
+  .kpi span{font-size:12px;color:var(--mut)}
+  .tw{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{position:sticky;top:0;background:#eef1f4;cursor:pointer;user-select:none}
+  tfoot td{font-weight:700;background:#f0f7f4;position:sticky;bottom:0}
+  tr.fail td{background:#fef3f2;color:var(--err)}
+  details{margin-top:8px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Votos por município — Deputado Estadual, Ceará 2026</h1>
+  <p>Fonte: arquivos JSON oficiais de divulgação de resultados do TSE (eleição 6259, cargo 0007)</p>
+</header>
+<main>
+  <div class="card">
+    <label for="busca">Candidato</label>
+    <input id="busca" type="search" placeholder="Filtrar por nome, número ou partido…" disabled>
+    <select id="cand" disabled><option>Carregando candidatos…</option></select>
+    <div class="row">
+      <button id="btnXlsx" disabled>Gerar planilha Excel</button>
+      <button id="btnAll" class="sec" disabled>Excel com todos os candidatos</button>
+      <button id="btnRetry" class="sec" style="display:none">Reconsultar municípios com falha</button>
+    </div>
+    <div class="bar"><div id="prog"></div></div>
+    <div class="msg" id="status">Iniciando…</div>
+    <details id="errBox" style="display:none"><summary class="err">Erros de consulta</summary><pre id="errList" style="white-space:pre-wrap"></pre></details>
+  </div>
+
+  <div class="card">
+    <div class="kpis">
+      <div class="kpi"><b id="kCand">—</b><span>Votos do candidato no Ceará</span></div>
+      <div class="kpi"><b id="kVal">—</b><span>Votos válidos (Dep. Estadual)</span></div>
+      <div class="kpi"><b id="kPct">—</b><span>% do candidato</span></div>
+      <div class="kpi"><b id="kMun">—</b><span>Municípios carregados</span></div>
+    </div>
+    <div class="msg" id="check"></div>
+  </div>
+
+  <div class="card">
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th data-k="nome">Município</th><th data-k="cod">Código TSE</th>
+          <th data-k="vv">Votos gerais válidos</th><th data-k="tv">Votos totais</th>
+          <th data-k="vc">Votos do candidato</th><th data-k="pct">%</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+        <tfoot><tr id="tfoot"></tr></tfoot>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// <PURE>
+const CFG = {
+  base: 'https://resultados.tse.jus.br/oficial/ele2026/6259',
+  eleicao: '006259', cargo: '0007', uf: 'ce',
+  concurrency: 4, delayMs: 120
+};
+const URLS = {
+  estado: () => `${CFG.base}/dados/${CFG.uf}/${CFG.uf}-c${CFG.cargo}-e${CFG.eleicao}-u.json`,
+  municipio: cod => `${CFG.base}/dados/${CFG.uf}/${CFG.uf}${String(cod).padStart(5,'0')}-c${CFG.cargo}-e${CFG.eleicao}-u.json`,
+  lista: () => `${CFG.base}/config/mun-e${CFG.eleicao}-cm.json`
+};
+
+// Números do TSE vêm como texto pt-BR: "1.234" = 1234 ; "12,34" = 12.34
+function num(x){
+  if (x === null || x === undefined || x === '') return 0;
+  if (typeof x === 'number') return x;
+  const n = parseFloat(String(x).replace(/\./g, '').replace(',', '.'));
+  return isNaN(n) ? 0 : n;
+}
+
+function findMunicipios(root){
+  let found = null;
+  (function walk(o){
+    if (found || !o || typeof o !== 'object') return;
+    if (!Array.isArray(o)) {
+      const id = String(o.cd || o.sg || '').toLowerCase();
+      const ds = String(o.ds || o.nm || '').toLowerCase();
+      if (id === 'ce' || ds === 'ceará' || ds === 'ceara') {
+        for (const k of Object.keys(o)) {
+          const v = o[k];
+          if (Array.isArray(v) && v.length > 20 && v[0] && typeof v[0] === 'object' && 'cd' in v[0] && ('nm' in v[0] || 'ds' in v[0])) { found = v; return; }
+        }
+      }
+    }
+    for (const k in o) walk(o[k]);
+  })(root);
+  return found ? found.map(m => ({ cod: String(m.cd).padStart(5,'0'), nome: String(m.nm || m.ds) })) : null;
+}
+
+// Lista de candidatos (arquivo estadual): carg[].agr[].par[].cand[]
+function parseCandidatos(json){
+  const out = [];
+  const add = (c, par) => out.push({
+    id: String(c.sqcand || c.n),
+    sqcand: String(c.sqcand || ''),
+    numero: String(c.n || ''),
+    nome: String(c.nmu || c.nm || c.nmc || ('Candidato ' + c.n)),
+    partido: par ? String(par.sg || par.nm || '') : '',
+    status: String(c.st || c.dvt || ''),
+    totalEstado: num(c.vap)
+  });
+  for (const carg of (json.carg || []))
+    for (const agr of (carg.agr || []))
+      for (const par of (agr.par || []))
+        for (const c of (par.cand || [])) add(c, par);
+  if (!out.length) { // fallback: busca recursiva por objetos com "vap"
+    (function walk(o){
+      if (!o || typeof o !== 'object') return;
+      if (!Array.isArray(o) && 'vap' in o && ('n' in o || 'sqcand' in o)) add(o, null);
+      for (const k in o) walk(o[k]);
+    })(json);
+  }
+  return out;
+}
+
+// Arquivo municipal -> votos por candidato + totais do cargo
+function parseMunicipio(json){
+  const carg = (json.carg || [])[0] || {};
+  const v = json.v || carg.v || {};
+  const s = json.s || carg.s || {};
+  const votos = {};
+  for (const agr of (carg.agr || []))
+    for (const par of (agr.par || []))
+      for (const c of (par.cand || [])) votos[String(c.sqcand || c.n)] = num(c.vap);
+  const vv = num(v.vv) || (num(v.tvn) + num(v.tvl));
+  const tv = num(v.tv) || (vv + num(v.vb) + num(v.vn));
+  return { votos, vv, tv, pst: s.pst !== undefined ? num(s.pst) : null };
+}
+// </PURE>
+
+const st = { cands: [], muns: [], dados: {}, falhas: {}, estadoTotal: {}, sel: null, sortK: 'nome', sortDir: 1, abort: false };
+const $ = id => document.getElementById(id);
+const fmt = n => Math.round(n).toLocaleString('pt-BR');
+const pctFmt = n => (n * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const setStatus = (t, cls) => { const e = $('status'); e.textContent = t; e.className = 'msg ' + (cls || ''); };
+
+async function fetchJson(url){
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) return await r.json();
+      const err = new Error('HTTP ' + r.status); err.status = r.status; last = err;
+      if (r.status === 403) st.abort = true;            // possível bloqueio temporário: parar
+      if (r.status < 429 && r.status !== 408) throw err; // 404 etc.: não insistir
+    } catch (e) {
+      if (e.status && e.status < 429) throw e;
+      last = e;
+    }
+    await sleep(800 * (i + 1));
+  }
+  throw last;
+}
+
+async function init(){
+  try {
+    setStatus('Lendo lista de candidatos e municípios do TSE…');
+    const [estado, lista] = await Promise.all([ fetchJson(URLS.estado()), fetchJson(URLS.lista()) ]);
+    st.cands = parseCandidatos(estado).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    st.muns = findMunicipios(lista);
+    if (!st.cands.length) throw new Error('Nenhum candidato encontrado no arquivo estadual (schema inesperado).');
+    if (!st.muns) throw new Error('Lista de municípios do Ceará não encontrada no arquivo de configuração.');
+    st.muns.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    for (const c of st.cands) st.estadoTotal[c.id] = c.totalEstado;
+    montarSelect('');
+    $('busca').disabled = $('cand').disabled = false;
+    if (st.muns.length !== 184) setStatus(`Atenção: ${st.muns.length} municípios na lista (esperado: 184).`, 'warn');
+    await carregarMunicipios(st.muns);
+  } catch (e) {
+    setStatus('Falha ao iniciar: ' + e.message + (e.status ? '' : ' — se abriu o arquivo direto do disco e o navegador bloqueou, use o Live Server do VS Code ou publique no GitHub Pages.'), 'err');
+  }
+}
+
+function montarSelect(filtro){
+  const f = filtro.trim().toLowerCase();
+  const sel = $('cand');
+  const atual = st.sel;
+  sel.innerHTML = '';
+  const lista = st.cands.filter(c => !f || (c.nome + ' ' + c.numero + ' ' + c.partido).toLowerCase().includes(f));
+  for (const c of lista) {
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = `${c.nome} (${c.numero})${c.partido ? ' — ' + c.partido : ''}`;
+    sel.appendChild(o);
+  }
+  if (lista.some(c => c.id === atual)) sel.value = atual;
+  else if (lista.length) { sel.value = lista[0].id; st.sel = lista[0].id; }
+  render();
+}
+
+async function carregarMunicipios(alvo){
+  st.abort = false;
+  const total = alvo.length; let feitos = 0; let i = 0;
+  $('btnRetry').style.display = 'none';
+  async function worker(){
+    while (i < alvo.length && !st.abort) {
+      const m = alvo[i++];
+      try {
+        st.dados[m.cod] = parseMunicipio(await fetchJson(URLS.municipio(m.cod)));
+        delete st.falhas[m.cod];
+      } catch (e) { st.falhas[m.cod] = e.message; }
+      feitos++;
+      $('prog').style.width = (feitos / total * 100) + '%';
+      setStatus(`Consultando municípios… ${feitos}/${total}`);
+      if (feitos % 10 === 0) render();
+      await sleep(CFG.delayMs);
+    }
+  }
+  await Promise.all(Array.from({ length: CFG.concurrency }, worker));
+  render();
+  const nF = Object.keys(st.falhas).length;
+  const nOk = Object.keys(st.dados).length;
+  if (st.abort) setStatus('Consulta interrompida: o TSE respondeu 403 (possível bloqueio temporário). Aguarde alguns minutos e reconsulte as falhas.', 'err');
+  else if (nF) setStatus(`Concluído com ${nF} falha(s). ${nOk} municípios carregados.`, 'warn');
+  else setStatus(`Pronto: ${nOk} municípios carregados. Escolha o candidato e gere a planilha.`);
+  $('btnRetry').style.display = nF ? '' : 'none';
+  const box = $('errBox');
+  box.style.display = nF ? '' : 'none';
+  $('errList').textContent = Object.entries(st.falhas).map(([cod, m]) => {
+    const mun = st.muns.find(x => x.cod === cod); return `${mun ? mun.nome : cod} (${cod}): ${m}`;
+  }).join('\n');
+  $('btnXlsx').disabled = $('btnAll').disabled = nOk === 0;
+}
+
+function linhas(){
+  const id = st.sel;
+  return st.muns.map(m => {
+    const d = st.dados[m.cod];
+    if (!d) return { nome: m.nome, cod: m.cod, falha: st.falhas[m.cod] || 'pendente' };
+    const vc = d.votos[id] || 0;
+    return { nome: m.nome, cod: m.cod, vv: d.vv, tv: d.tv, vc, pct: d.vv ? vc / d.vv : 0, pst: d.pst };
+  });
+}
+function totais(ls){
+  const ok = ls.filter(l => !l.falha);
+  const vv = ok.reduce((a, l) => a + l.vv, 0), tv = ok.reduce((a, l) => a + l.tv, 0), vc = ok.reduce((a, l) => a + l.vc, 0);
+  return { vv, tv, vc, pct: vv ? vc / vv : 0, n: ok.length };
+}
+
+function render(){
+  if (!st.sel) return;
+  let ls = linhas();
+  const k = st.sortK, dir = st.sortDir;
+  ls.sort((a, b) => {
+    const x = a[k], y = b[k];
+    if (typeof x === 'string' || typeof y === 'string') return String(x ?? '').localeCompare(String(y ?? ''), 'pt-BR') * dir;
+    return ((x ?? -1) - (y ?? -1)) * dir;
+  });
+  const tb = $('tbody'); tb.innerHTML = '';
+  for (const l of ls) {
+    const tr = document.createElement('tr');
+    if (l.falha) {
+      tr.className = 'fail';
+      tr.innerHTML = '<td></td><td></td><td colspan="4" style="text-align:left"></td>';
+      tr.children[0].textContent = l.nome; tr.children[1].textContent = l.cod; tr.children[2].textContent = 'Falha: ' + l.falha;
+    } else {
+      [l.nome, l.cod, fmt(l.vv), fmt(l.tv), fmt(l.vc), pctFmt(l.pct)].forEach(t => { const td = document.createElement('td'); td.textContent = t; tr.appendChild(td); });
+    }
+    tb.appendChild(tr);
+  }
+  const t = totais(ls);
+  $('tfoot').innerHTML = '';
+  ['TOTAL CEARÁ', '', fmt(t.vv), fmt(t.tv), fmt(t.vc), pctFmt(t.pct)].forEach(x => { const td = document.createElement('td'); td.textContent = x; $('tfoot').appendChild(td); });
+  $('kCand').textContent = fmt(t.vc); $('kVal').textContent = fmt(t.vv); $('kPct').textContent = pctFmt(t.pct);
+  $('kMun').textContent = `${t.n}/${st.muns.length}`;
+  const oficial = st.estadoTotal[st.sel];
+  const chk = $('check');
+  if (t.n === st.muns.length && oficial !== undefined) {
+    if (Math.round(oficial) === Math.round(t.vc)) { chk.textContent = '✔ Conferência: a soma dos municípios bate com o total estadual do TSE (' + fmt(oficial) + ').'; chk.className = 'msg'; }
+    else { chk.textContent = `⚠ A soma dos municípios (${fmt(t.vc)}) difere do total estadual do TSE (${fmt(oficial)}). A totalização pode ter avançado entre as consultas — recarregue a página.`; chk.className = 'msg warn'; }
+  } else { chk.textContent = ''; }
+}
+
+function candAtual(){ return st.cands.find(c => c.id === st.sel); }
+function slug(s){ return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, ''); }
+
+function baixarCSV(nome, aoa){
+  const csv = aoa.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = nome.replace(/\.xlsx$/, '.csv'); a.click();
+}
+function confirmarIncompleto(){
+  const nF = st.muns.length - Object.keys(st.dados).length;
+  return nF === 0 || confirm(`${nF} município(s) ainda sem dados. A planilha ficará incompleta. Gerar mesmo assim?`);
+}
+
+function gerarXlsx(){
+  if (!confirmarIncompleto()) return;
+  const c = candAtual(); const ls = linhas(); const t = totais(ls);
+  const head = ['Município', 'Código TSE', 'Votos gerais válidos — Deputado Estadual', 'Votos totais — cargo', 'Votos do candidato', '% do candidato (sobre válidos)'];
+  const rows = ls.map(l => l.falha ? [l.nome, l.cod, 'FALHA: ' + l.falha, '', '', ''] : [l.nome, l.cod, l.vv, l.tv, l.vc, l.pct]);
+  rows.push(['TOTAL CEARÁ', '', t.vv, t.tv, t.vc, t.pct]);
+  const aoa = [head, ...rows];
+  const resumo = [
+    ['Eleição', '2026 — 1º turno (eleição TSE 6259)'], ['Cargo', 'Deputado Estadual'], ['UF', 'Ceará'],
+    ['Candidato', c.nome], ['Número', c.numero], ['Partido', c.partido], ['ID TSE (sqcand)', c.sqcand],
+    ['Municípios consultados', `${t.n} de ${st.muns.length}`],
+    ['Votos gerais válidos (Dep. Estadual)', t.vv], ['Votos totais (cargo)', t.tv],
+    ['Votos do candidato', t.vc], ['% do candidato sobre válidos', t.pct],
+    ['Total estadual oficial do candidato (arquivo estadual TSE)', st.estadoTotal[c.id] ?? ''],
+    ['Fonte', 'TSE — arquivos JSON de divulgação de resultados (resultados.tse.jus.br)'],
+    ['Gerado em', new Date().toLocaleString('pt-BR')]
+  ];
+  const nome = `votos_estadual_${slug(c.nome)}_CE_2026.xlsx`;
+  if (typeof XLSX === 'undefined') { baixarCSV(nome, aoa); return; }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 28 }, { wch: 12 }, { wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 24 }];
+  for (let r = 1; r < aoa.length; r++) {
+    for (const col of [2, 3, 4]) { const a = ws[XLSX.utils.encode_cell({ r, c: col })]; if (a && typeof a.v === 'number') a.z = '#,##0'; }
+    const p = ws[XLSX.utils.encode_cell({ r, c: 5 })]; if (p && typeof p.v === 'number') p.z = '0.00%';
+  }
+  XLSX.utils.book_append_sheet(wb, ws, 'Votação por município');
+  const wr = XLSX.utils.aoa_to_sheet(resumo);
+  wr['!cols'] = [{ wch: 52 }, { wch: 60 }];
+  for (const [i, row] of resumo.entries()) { const a = wr[XLSX.utils.encode_cell({ r: i, c: 1 })]; if (a && typeof a.v === 'number') a.z = (row[0].startsWith('%')) ? '0.00%' : '#,##0'; }
+  XLSX.utils.book_append_sheet(wb, wr, 'Resumo');
+  XLSX.writeFile(wb, nome);
+}
+
+// Matriz: todos os candidatos x municípios (votos)
+function gerarXlsxTodos(){
+  if (!confirmarIncompleto()) return;
+  const head = ['Candidato', 'Número', 'Partido', ...st.muns.map(m => m.nome), 'TOTAL CEARÁ'];
+  const gerais = ['VOTOS GERAIS VÁLIDOS', '', '', ...st.muns.map(m => st.dados[m.cod] ? st.dados[m.cod].vv : ''), st.muns.reduce((a, m) => a + (st.dados[m.cod] ? st.dados[m.cod].vv : 0), 0)];
+  const rows = st.cands.map(c => {
+    const vs = st.muns.map(m => st.dados[m.cod] ? (st.dados[m.cod].votos[c.id] || 0) : '');
+    return [c.nome, c.numero, c.partido, ...vs, vs.reduce((a, v) => a + (v || 0), 0)];
+  });
+  const aoa = [head, gerais, ...rows];
+  if (typeof XLSX === 'undefined') { baixarCSV('votos_estadual_todos_candidatos_CE_2026.xlsx', aoa); return; }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 30 }, { wch: 8 }, { wch: 12 }];
+  ws['!freeze'] = { xSplit: 3, ySplit: 1 };
+  XLSX.utils.book_append_sheet(wb, ws, 'Todos os candidatos');
+  XLSX.writeFile(wb, 'votos_estadual_todos_candidatos_CE_2026.xlsx');
+}
+
+$('busca').addEventListener('input', e => montarSelect(e.target.value));
+$('cand').addEventListener('change', e => { st.sel = e.target.value; render(); });
+$('btnXlsx').addEventListener('click', gerarXlsx);
+$('btnAll').addEventListener('click', gerarXlsxTodos);
+$('btnRetry').addEventListener('click', () => carregarMunicipios(st.muns.filter(m => !st.dados[m.cod])));
+document.querySelectorAll('th[data-k]').forEach(th => th.addEventListener('click', () => {
+  const k = th.dataset.k; st.sortDir = (st.sortK === k) ? -st.sortDir : 1; st.sortK = k; render();
+}));
+init();
+</script>
+</body>
+</html>
